@@ -1,10 +1,12 @@
 查看程序依赖库  ldd server
 
-
-
-
 go run main.go  合并操作 go build main.go && ./main
-
+# 2 golang的开服环境
+GOPATH路径
+bin 编译后端程序
+pkg 存储一些依赖文件
+src 全部的源码 github.com开源库 golang.org
+# 3 常见的四种变量声明
 := 只能用函数体内, 全局变量不能用，必须用 var a = 10;
 
 # 7 函数多返回值
@@ -252,6 +254,8 @@ func main() {
 	printMap(cityMap)
 }
 ``
+map 并发问题
+https://blog.csdn.net/raoxiaoya/article/details/111469483
 
 # 17 struct 基本定义与使用
 ``
@@ -635,23 +639,222 @@ GMP（goroutine携程，processor处理器， thread线程）
 抢占，     如果没有可用cpu，每个G 处理10ms后就会别的G来抢这个线程
 全局G队列  work Stelling 偷取的时间，优先从每个P的队列单独处理，如果没有在去G队列进行 
 
+# 27 创建 goroutine
+``
+//子 goroutine
+func newTask() {
+	i := 0
+	for {
+		i++
+		fmt.Println("new Goroutin i = %d", 1)
+		time.Sleep(1 * time.Second)
+	}
+}
+func main() {
+	go newTask() //有名函数调用
+	fmt.Println("main goroutine exit")
+	go func() {
+		defer fmt.Println("A.defer")
+		func() {
+			defer fmt.Println("B.defer")
+			runtime.Goexit() //退出当前的 goroutine
+			fmt.Println("B")
+		}() //匿名函数小括号调用 ()
+		fmt.Println("A")
+	}()
+	//匿名函数传值
+	go func(a int, b int) {
+		fmt.Println("a = ", a, "b = ", b)
+	}(100, 200)
+	for {
+		time.Sleep(1 * time.Second)
+	}
+}
+``
+# 28 channel 的基本定义与使用
+goroutine之间相互通信的数据类型 channel 管道
+channel 自身有同步两个goroutine的功能
+``
+func main() {
+	//定义一个channel
+	c := make(chan int)
+	go func() {
+		defer fmt.Println("goroutine 结束")
+		fmt.Println("goroutine 开始")
+		c <- 666 //思考下 如果这个地方是需要塞入多个值，外边接收如何处理，引出下一个点的有缓存channel
+	}()
+	num := <-c
+	fmt.Println("num = ", num)
+	fmt.Println("main goroutine end")
+}
+``
+分析 
+main goroutine 在读取chanel 数据 没有的情况下 会阻塞等待知道收到数据
+sub  goroutine 在写入如果没有接受的也会等待
+所以 无论 main先执行，还是 sub中的 goroutine先执行到，整体还是是一个同步的流程
 
+# 29 有缓冲与无缓冲同步问题
+* 使用无缓冲的通道在 goroutine 之间同步
+1.在两个goroutine都达到通道，但那个都没有开始执行发送后者接收
+2.在左侧goroutine 向通道发送数据，此时这个goroutine  会在通道中被锁住，直到交换完成
+3.在右侧goroutine 从通道接收数据，此时这个goroutine也会在通道中被锁住，直到交换完成
+4.交换完成 两个锁住的goroutine 得到的释放。两个goroutine现在都可以去做其他事了
 
+* 使用有缓冲的通道在 goroutine 之间同步数据
+1.右侧的goroutine正在从通道接收一个值
+2.右侧的goroutine独立完成接收的动作，而左侧的goroutine 正在发送一个新值到通道里
+3.左侧的goroutine还在向通道接收值的动作，而右侧的goroutine正在从通道接收另外一个值。两个操作即不是同步，也不会相互阻塞(当空间不够的时间会锁)
+4.所有的发送和接收完成，而通道里还有几个值，也有一些空间可以存更多的值
+特点 
+当channel已满，再向里面写数据，就会阻塞
+当channel为空，从  里边取数据，也会阻塞
+前提都是管道没有关闭
 
+``
+func main() {
+	c := make(chan int, 3)
+	fmt.Println("len(c) = ", len(c), "cap(c) = ", cap(c))
+	go func() {
+		defer fmt.Println("子goroutine 结束")
+		 //i改成1，那就塞入3个元素，main中读取四次，会导致锁住，而当前goroutine已结束不会再发数据，所以会产生死锁，引入下一个带你 channel close
+		for i := 0; i < 4; i++ {
+			c <- i
+			fmt.Println("子goroutine 发送元素=", i, "len(c) = ", len(c), "cap(c)= ", cap(c))
+		}
+	}()
+	time.Sleep(2 * time.Second)
+	for i := 0; i < 4; i++ {
+		num := <-c
+		fmt.Println("num = ", num)
+	}
+	fmt.Println("main 结束")
+}
+``
 
+# 30 channel的关闭特点
+channel 不像文件一样需要经常关闭，只有当你确定没有任何数据发送了，或者你想显式的结束range循环之类的 才去关闭channel
+关闭channel后，无法向channel再发送数据（引发 panic 错误后导致接受立即返回零值）
+关闭channel后，可以继续从channel接收数据
+对于 nil channel，无论收发都会阻塞
+``
+func main() {
+	c := make(chan int)
+	go func() {
+		for i := 0; i < 5; i++ {
+			c <- i
+		}
+		//close 可以关闭一个 channel
+		close(c)
+	}()
+	for {
+		//ok为true 标识 channel 没有关闭，如果为false标识 channel已经关闭
+		if data, ok := <-c; ok { // 先执行分好前的表达式，后边的ok 相当于if的局部形参，if最终判断是后边的ok
+			fmt.Println("data =", data)
+		} else {
+			break
+		}
+	}
+	fmt.Println("main Finished..")
+}
+``
+# 31 channel 与 range
+主要从channel读取数据 for data := range c {}
+``
+func main() {
+	c := make(chan int)
+	go func() {
+		for i := 0; i < 5; i++ {
+			c <- i
+		}
+		//close 可以关闭一个 channel
+		close(c)
+	}()
+	for {
+		//ok为true 标识 channel 没有关闭，如果为false标识 channel已经关闭
+		if data, ok := <-c; ok { // 先执行分好前的表达式，后边的ok 相当于if的局部形参，if最终判断是后边的ok
+			fmt.Println("data =", data)
+		} else {
+			break
+		}
+	}
+	//重点 上边的可以简写成 
+	for data := range c {
+		fmt.Println("data = ", data)
+	}
+	fmt.Println("main Finished..")
+}
+``
+# 32 channel 与 select
+单流程下 一个map只能监控一个channel的状态，select可以完成监控多个channel的状态
+seelct 具备多路channel的监控状态功能
+``
+func fibonacii(c, quit chan int) {
+	x, y := 1, 1
+	for {
+		select {
+		case c <- x:
+			//如果c可写，则case进来
+			x = y
+			y = x + y
+		case <-quit:
+			fmt.Println("quit")
+			return
+		}
+	}
+}
+func main() {
+	c := make(chan int)
+	quit := make(chan int)
+	//sub go
+	go func() {
+		for i := 0; i < 10; i++ {
+			fmt.Println(<-c)
+		}
+		quit <- 0
+	}()
+	// main go
+	fibonacii(c, quit)
+}
+``
+# 34 GO PATH工作模式的弊端
+弊端
+没有版本管理， 		go get -u github.com/aceid/zindex  这个没法指定版本，默认下载最新
+无法同步一致第三库
+无法指定当前项目引用的第三方版本号，本地装什么什么版本，导包就导的什么版本
 
+# 35 GoModules 模式基础环境说明
+特殊环境变量
+1.GO111MODULE 是否开启go modules 模式
+go env -w GO111MODELE="on"
+2.GOPROXY  设置下载代理，direct 用于指示go 回源到模块版本的源地址去抓取（比如 github等）
+go env -w GOPROXY="https://goproxy.cn,direct"
+3.GOSUMDB 校验下载包的完整性没有被篡改过的，通过设置的是网址进行校验 ，设置了GOPROXY 校验也会通过这个地址
+4.私有仓库 GONOPROXY/GONOSUMDB/GOPRIVATE, 设置一个GOPRIVATE就行覆盖
+go env -w GOPRRIVATE="git.exameple.com,github.com/aceid/zinx"
 
+# 35 go modules 初始化项目
+一、开启GO MODULES 模块
+go env -w GO111MODELE="on"
+export GO111MODULE=one
+二、初始化项目
+1.任意文件创建一个项目
+2.创建go.mod 文件 go mod init github.com/aceid
+3.会生成一个 go.sum 文件
+4.在该项目编写源码依赖某个库
+手动下载 go get github.com/aceid/zinx （会下载到 GOPATH/src/mod/）
+go.mod 会添加一行代码，解析
+indiret 间接依赖
+h1:哈希值（下载包的所有文件做的一个哈希值），如果不存在，标识依赖的库可能用不上
+go.mod:哈希值（当前go.mod文件的哈希值）
 
+生成一个 go.sum 文件作用 罗列当前项目直接或者间接所有模块版本，保证今后依赖的版本不会被篡改
+
+# 36 改变模块依赖关系
+go mod edit -repalce=zinx@v0.1=zinx@v0.2
+
+go.mod 文件会新增一行  replace zinx v1 => v2
 
 
 同一个目录下面不能有个多 package main
 创建map映射表和slice切片的时候都必须用make，或者初始化，否则会报编译错误：“not an expression”，（不是表达式）
-go env -w GOPROXY="https://goproxy.cn"
-
-
-
-
-
-
-
 
